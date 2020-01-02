@@ -1,0 +1,39 @@
+library:
+  source-dirs: src
+tests:
+  dbml-parser-test:
+    source-dirs: test
+    main: Spec.hs
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - dbml-parser
+copyright: 2019 Author name here
+maintainer: example@example.com
+dependencies:
+- scientific
+- parser-combinators
+- text
+- megaparsec
+- base >= 4.7 && < 5
+name: dbml-parser
+version: 0.1.0.0
+extra-source-files:
+- README.md
+- ChangeLog.md
+author: Author name here
+github: githubuser/dbml-parser
+license: BSD3
+executables:
+  dbml-parser-exe:
+    source-dirs: app
+    main: Main.hs
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - dbml-parser
+description: Please see the README on GitHub at <https://github.com/githubuser/dbml-parser#readme>
