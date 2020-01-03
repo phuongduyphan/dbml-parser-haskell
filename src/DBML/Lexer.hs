@@ -14,6 +14,7 @@ module DBML.Lexer
   , Boolean
   , FieldType
   , Expression
+  , Color
   )
 where
 

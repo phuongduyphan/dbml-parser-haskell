@@ -2,42 +2,14 @@
 {-# LANGUAGE RecordWildCards   #-}
 
 module DBML
-  ( pAlias
-  , pFieldDefault
-  , pRefInline
-  , pIndexType
-  , pNoteInline
-  , pNameInline
-  , pIndexSetting
-  , pIndexSettings
-  , pIndexIdentifier
-  , pIndexIdentifiers
-  , pIndex
-  , pIndexes
-  , pFieldSetting
-  , pFieldSettings
-  , pField
-  , pEnumValueSetting
-  , pEnumValueSettings
-  , pEnumValue
+  ( pTable
+  , pRef
   , pEnum
-  , pTableValue
-  , pTableSetting
-  , pTable
-  , DefaultType
-  , Relation
-  , IndexType
-  , IndexSetting
-  , IndexIdentifier
-  , Index
-  , FieldSetting
-  , EnumValueSetting
-  , EnumValue
-  , DBML.Enum
-  , Field
-  , TableValue
-  , TableSetting
+  , pTableGroup
   , Table
+  , Ref
+  , DBML.Enum
+  , TableGroup
   )
 where
 
@@ -56,12 +28,12 @@ data DefaultType = DefaultString Text
   | DefaultBool Boolean
   | DefaultNull deriving (Show)
 
-data Relation = OneToMany Char | ManyToOne Char | OneToOne Char deriving (Show)
+data RefRelation = OneToMany Char | ManyToOne Char | OneToOne Char deriving (Show)
 
 data RefInline = RefInline
-  { refTableName :: Text
-  , refFieldName :: Text
-  , refRelation :: Relation
+  { refInlineTableName :: Text
+  , refInlineFieldName :: Text
+  , refInlineRelation :: RefRelation
   } deriving (Show)
 
 data IndexType = BTree | Hash deriving (Show)
@@ -104,13 +76,108 @@ data Field = Field
 
 data TableValue = TableField Field | TableIndexes [Index] deriving (Show)
 
-data TableSetting = TableHeaderColor Text | TableNote Text deriving (Show)
+data TableSetting = TableHeaderColor Color | TableNote Text deriving (Show)
 
 data Table = Table 
   { tableName :: Text 
   , tableSettings :: Maybe [TableSetting]
   , tableValues :: Maybe [TableValue]
   } deriving (Show)
+
+data RefAction = NoAction | Restrict | Cascade | SetNull | SetDefault deriving (Show)
+
+data RefSetting = RefOnUpdate RefAction | RefOnDelete RefAction deriving (Show)
+
+data RefEndpoint = RefEndpoint 
+  { endpointTableName :: Text
+  , endpointFieldName :: Text 
+  } deriving (Show)
+
+data RefValue = RefValue
+  { refValueEndpoints :: [RefEndpoint]
+  , refValueRelation :: RefRelation
+  , refValueSettings :: Maybe [RefSetting]
+  } deriving (Show)
+
+data Ref = Ref 
+  { refName :: Maybe Text
+  , refValue :: RefValue
+  } deriving (Show)
+
+newtype TableGroupValue = TableGroupValue { tgTableName :: Text } deriving (Show)
+
+data TableGroup = TableGroup
+  { tableGroupName :: Text
+  , tableGroupValues :: [TableGroupValue]
+  } deriving (Show)
+
+pTableGroup :: Parser TableGroup
+pTableGroup = do
+  tableGroup
+  tableGroupName <- identifier
+  lexeme (char '{')
+  tableGroupValues <- MP.many pTableGroupValue
+  lexeme (char '}')
+  return TableGroup {..}
+
+pTableGroupValue :: Parser TableGroupValue
+pTableGroupValue = do
+  tgTableName <- identifier
+  return TableGroupValue {..}
+
+pRef :: Parser Ref
+pRef = try pRefLong <|> pRefShort
+
+pRefLong :: Parser Ref
+pRefLong = do
+  ref
+  refName <- optional identifier
+  lexeme (char '{')
+  refValue <- pRefValue
+  lexeme (char '}')
+  return Ref {..}
+
+pRefShort :: Parser Ref
+pRefShort = do
+  ref
+  refName <- optional identifier
+  lexeme (char ':')
+  refValue <- pRefValue
+  return Ref {..}
+
+pRefValue :: Parser RefValue
+pRefValue = do
+  refEndpoint1 <- pRefEndpoint
+  refRelation <- pRefRelation
+  refEndpoint2 <- pRefEndpoint
+  refSettings <- optional pRefSettings
+  return (RefValue [refEndpoint1, refEndpoint2] refRelation refSettings)
+
+pRefEndpoint :: Parser RefEndpoint
+pRefEndpoint = do
+  endpointTableName <- identifier
+  lexeme (char '.')
+  endpointFieldName <- identifier
+  return RefEndpoint {..}
+
+pRefSettings :: Parser [RefSetting]
+pRefSettings = do
+  lexeme (char '[')
+  fstRefSetting <- pRefSetting
+  refSettings <- optional (MP.some (lexeme (char ',') *> pRefSetting))
+  lexeme (char ']')
+  return (fstRefSetting : fromMaybe [] refSettings)
+
+pRefSetting :: Parser RefSetting
+pRefSetting = (RefOnUpdate <$> (lexeme (string' "update") *> lexeme (char ':') *> pRefAction))
+  <|> (RefOnDelete <$> (lexeme (string' "delete") *> lexeme (char ':') *> pRefAction))
+
+pRefAction :: Parser RefAction
+pRefAction = (NoAction <$ (lexeme (string' "no") *> lexeme (string' "action")))
+  <|> (Restrict <$ lexeme (string' "restrict"))
+  <|> (Cascade <$ lexeme (string' "cascade"))
+  <|> (SetNull <$ (lexeme (string' "set") *> lexeme (string' "null")))
+  <|> (SetDefault <$ (lexeme (string' "set") *> lexeme (string' "default")))
 
 pTable :: Parser Table
 pTable = do
@@ -132,7 +199,7 @@ pTableSettings = do
 
 pTableSetting :: Parser TableSetting
 pTableSetting = 
-  (TableHeaderColor <$> lexeme (string' "headercolor"))
+  (TableHeaderColor <$> (lexeme (string' "headercolor") *> lexeme (char ':') *> colorLiteral))
   <|> (TableNote <$> pNoteInline)
 
 pTableValue :: Parser TableValue
@@ -245,14 +312,16 @@ pRefInline :: Parser RefInline
 pRefInline = do
   lexeme (string' "ref")
   lexeme (char ':')
-  refRelation <-
-    (OneToMany <$> lexeme (char '<'))
-    <|> (ManyToOne <$> lexeme (char '>'))
-    <|> (OneToOne <$> lexeme (char '-'))
-  refTableName <- identifier
+  refInlineRelation <- pRefRelation
+  refInlineTableName <- identifier
   lexeme (char '.')
-  refFieldName <- identifier
+  refInlineFieldName <- identifier
   return RefInline { .. }
+
+pRefRelation :: Parser RefRelation
+pRefRelation = (OneToMany <$> lexeme (char '<'))
+  <|> (ManyToOne <$> lexeme (char '>'))
+  <|> (OneToOne <$> lexeme (char '-'))
 
 pFieldDefault :: Parser DefaultType
 pFieldDefault =
