@@ -1,338 +1,151 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards   #-}
 
 module DBML
-  ( pTable
-  , pRef
-  , pEnum
-  , pTableGroup
-  , Table
-  , Ref
-  , DBML.Enum
-  , TableGroup
+  ( DBML.parse
+  , processTables
+  , DBMLState(..)
   )
 where
 
-import           Data.Text                      ( Text )
-import           DBML.Lexer
-import           DBML.Keyword
-import           Control.Applicative
-import           Text.Megaparsec.Char
 import           Text.Megaparsec               as MP
-import           Data.Scientific                ( Scientific )
+import           DBML.Parser
+import           DBML.Lexer
+import           DBML.Utils
+import           Data.Void
+import           Data.Text                      ( Text )
+import qualified Data.Text                     as T
+import qualified Data.Map.Strict               as Map
 import           Data.Maybe                     ( fromMaybe )
+import           Control.Monad.Trans.State.Lazy
+import           Control.Monad.Trans.Class      ( lift )
+import           Control.Monad                  ( liftM )
+import           Debug.Trace                    ( trace )
 
-data DefaultType = DefaultString Text
-  | DefaultExpr Expression
-  | DefaultNum Scientific
-  | DefaultBool Boolean
-  | DefaultNull deriving (Show)
+type Id = Int
 
-data RefRelation = OneToMany Char | ManyToOne Char | OneToOne Char deriving (Show)
-
-data RefInline = RefInline
-  { refInlineTableName :: Text
-  , refInlineFieldName :: Text
-  , refInlineRelation :: RefRelation
+data DBMLState = DBMLState
+  { tableS :: Map.Map Id NTable
+  , enumS :: Map.Map Id NEnum
+  , refS :: Map.Map Id NRef
+  , tableGroupS :: Map.Map Id NTableGroup
+  , fieldS :: Map.Map Id NField
+  , indexS :: Map.Map Id NIndex
+  , tableIdCounter :: Id
+  , enumIdCounter :: Id
+  , refIdCounter :: Id
+  , tableGroupIdCounter :: Id
+  , fieldIdCounter :: Id
   } deriving (Show)
 
-data IndexType = BTree | Hash deriving (Show)
-
-data IndexSetting = IndexPk | IndexUnique | IndexName Text | IndexType IndexType deriving (Show)
-
-data IndexIdentifier = IndexColumn Text | IndexExpr Expression deriving (Show)
-
-data Index = Index
-  { indexIdentifiers :: [IndexIdentifier]
-  , indexSettings :: Maybe [IndexSetting]
+data NTable = NTable
+  { ntId :: Id
+  , ntGroupId :: Maybe Id
+  , ntName :: Text
+  , ntTableSettings :: Maybe [TableSetting]
+  , ntFieldIds :: [Id]
+  -- , ntIndexIds :: [Id]
   } deriving (Show)
 
-data FieldSetting = FieldNotNull
-  | FieldNull 
-  | FieldPk 
-  | FieldUnique 
-  | FieldIncrement 
-  | FieldNote Text 
-  | FieldRefInline RefInline
-  | FieldDefault DefaultType deriving (Show)
-
-newtype EnumValueSetting = EnumValueNote Text deriving (Show)
-
-data EnumValue = EnumValue
-  { enumValue :: Text
-  , enumValueSettings :: Maybe [EnumValueSetting]
+data NEnum = NEnum
+  { neId :: Id
+  , neName :: Text
+  , neValueIds :: [Id]
+  , neFieldIds :: [Id]
   } deriving (Show)
 
-data Enum = Enum 
-  { enumName :: Text
-  , enumValues :: [EnumValue]
+data NRef = NRef
+  { nrId :: Id
+  , nrName :: Maybe Text
+  , nrValueRelation :: RefRelation
+  , nrValueSettings :: Maybe [RefSetting]
+  , nrEndpointIds :: [Id]
   } deriving (Show)
 
-data Field = Field
- { fieldName :: Text
- , fieldType :: Text
- , fieldSettings :: Maybe [FieldSetting]
- } deriving (Show)
-
-data TableValue = TableField Field | TableIndexes [Index] deriving (Show)
-
-data TableSetting = TableHeaderColor Color | TableNote Text deriving (Show)
-
-data Table = Table 
-  { tableName :: Text 
-  , tableSettings :: Maybe [TableSetting]
-  , tableValues :: Maybe [TableValue]
+data NTableGroup = NTableGroup
+  { ntgId :: Id
+  , ntgName :: Text
+  , ntgTableIds :: [Id]
   } deriving (Show)
 
-data RefAction = NoAction | Restrict | Cascade | SetNull | SetDefault deriving (Show)
-
-data RefSetting = RefOnUpdate RefAction | RefOnDelete RefAction deriving (Show)
-
-data RefEndpoint = RefEndpoint 
-  { endpointTableName :: Text
-  , endpointFieldName :: Text 
+data NField = NField
+  { nfId :: Id
+  , nfTableId :: Id
+  , nfEnumId :: Maybe Id
+  , nfName :: Text
+  , nfType :: Text
+  , nfFieldSettings :: Maybe [FieldSetting]
   } deriving (Show)
 
-data RefValue = RefValue
-  { refValueEndpoints :: [RefEndpoint]
-  , refValueRelation :: RefRelation
-  , refValueSettings :: Maybe [RefSetting]
+data NIndex = NIndex
+  { niId :: Id
+  , niIndexSettings :: Maybe [IndexSetting]
+  , niIndexIdentifiers :: Maybe [IndexIdentifier]
   } deriving (Show)
 
-data Ref = Ref 
-  { refName :: Maybe Text
-  , refValue :: RefValue
-  } deriving (Show)
+type DBMLMonad = StateT DBMLState (Either Text)
 
-newtype TableGroupValue = TableGroupValue { tgTableName :: Text } deriving (Show)
+parse :: Text -> Either (ParseErrorBundle Text Void) Database
+parse = MP.parse pDatabase ""
 
-data TableGroup = TableGroup
-  { tableGroupName :: Text
-  , tableGroupValues :: [TableGroupValue]
-  } deriving (Show)
+processTables :: Database -> DBMLMonad ()
+processTables db = do
+  tableMap <- getTableMap db
+  state    <- get
+  put state { tableS = Map.union (tableS state) tableMap }
+  return ()
 
-pTableGroup :: Parser TableGroup
-pTableGroup = do
-  tableGroup
-  tableGroupName <- identifier
-  lexeme (char '{')
-  tableGroupValues <- MP.many pTableGroupValue
-  lexeme (char '}')
-  return TableGroup {..}
+getTableMap :: Database -> DBMLMonad (Map.Map Id NTable)
+getTableMap (Database xs) = Map.fromList <$> mapM buildTable tables
+ where
+  tables = filter isTable xs
+  isTable (DBMLTable _) = True
+  isTable _             = False
+  buildTable (DBMLTable table) = do
+    state <- get
+    let tableId = tableIdCounter state
+    put state { tableIdCounter = tableId + 1 }
+    fieldMap <- getFieldMap table tableId
+    case allDifferent (map (nfName . snd) (Map.toList fieldMap)) of
+      Left fname -> lift
+        (        Left
+        $        "Field "
+        `T.append` fname
+        `T.append` " existed in table "
+        `T.append` tableName table
+        )
+      _ -> lift (Right ())
+    state1 <- get
+    put state1 { fieldS = Map.union (fieldS state1) fieldMap }
+    -- indexMap <- getIndexMap table (ntId nTable)
+    -- put state { indexS = Map.union (indexS state) indexMap }
+    return
+      ( tableId
+      , NTable { ntId            = tableIdCounter state
+               , ntGroupId       = Nothing
+               , ntName          = tableName table
+               , ntTableSettings = tableSettings table
+               , ntFieldIds      = map fst (Map.toList fieldMap)
+               }
+      )
 
-pTableGroupValue :: Parser TableGroupValue
-pTableGroupValue = do
-  tgTableName <- identifier
-  return TableGroupValue {..}
-
-pRef :: Parser Ref
-pRef = try pRefLong <|> pRefShort
-
-pRefLong :: Parser Ref
-pRefLong = do
-  ref
-  refName <- optional identifier
-  lexeme (char '{')
-  refValue <- pRefValue
-  lexeme (char '}')
-  return Ref {..}
-
-pRefShort :: Parser Ref
-pRefShort = do
-  ref
-  refName <- optional identifier
-  lexeme (char ':')
-  refValue <- pRefValue
-  return Ref {..}
-
-pRefValue :: Parser RefValue
-pRefValue = do
-  refEndpoint1 <- pRefEndpoint
-  refRelation <- pRefRelation
-  refEndpoint2 <- pRefEndpoint
-  refSettings <- optional pRefSettings
-  return (RefValue [refEndpoint1, refEndpoint2] refRelation refSettings)
-
-pRefEndpoint :: Parser RefEndpoint
-pRefEndpoint = do
-  endpointTableName <- identifier
-  lexeme (char '.')
-  endpointFieldName <- identifier
-  return RefEndpoint {..}
-
-pRefSettings :: Parser [RefSetting]
-pRefSettings = do
-  lexeme (char '[')
-  fstRefSetting <- pRefSetting
-  refSettings <- optional (MP.some (lexeme (char ',') *> pRefSetting))
-  lexeme (char ']')
-  return (fstRefSetting : fromMaybe [] refSettings)
-
-pRefSetting :: Parser RefSetting
-pRefSetting = (RefOnUpdate <$> (lexeme (string' "update") *> lexeme (char ':') *> pRefAction))
-  <|> (RefOnDelete <$> (lexeme (string' "delete") *> lexeme (char ':') *> pRefAction))
-
-pRefAction :: Parser RefAction
-pRefAction = (NoAction <$ (lexeme (string' "no") *> lexeme (string' "action")))
-  <|> (Restrict <$ lexeme (string' "restrict"))
-  <|> (Cascade <$ lexeme (string' "cascade"))
-  <|> (SetNull <$ (lexeme (string' "set") *> lexeme (string' "null")))
-  <|> (SetDefault <$ (lexeme (string' "set") *> lexeme (string' "default")))
-
-pTable :: Parser Table
-pTable = do
-  table
-  tableName <- identifier
-  tableSettings <- optional pTableSettings
-  lexeme (char '{')
-  tableValues <- optional $ MP.many pTableValue
-  lexeme (char '}')
-  return Table {..}
-
-pTableSettings :: Parser [TableSetting]
-pTableSettings = do
-  lexeme (char '[')
-  fstTableSetting <- pTableSetting
-  tableSettings   <- optional (MP.some (lexeme (char ',') *> pTableSetting))
-  lexeme (char ']')
-  return (fstTableSetting : fromMaybe [] tableSettings)
-
-pTableSetting :: Parser TableSetting
-pTableSetting = 
-  (TableHeaderColor <$> (lexeme (string' "headercolor") *> lexeme (char ':') *> colorLiteral))
-  <|> (TableNote <$> pNoteInline)
-
-pTableValue :: Parser TableValue
-pTableValue = try (TableField <$> pField) <|> (TableIndexes <$> pIndexes)
-
-pField :: Parser Field
-pField = do
-  fieldName <- identifier
-  fieldType <- identifier
-  fieldSettings <- optional pFieldSettings
-  return Field {..}
-
-pFieldSettings :: Parser [FieldSetting]
-pFieldSettings = do
-  lexeme (char '[')
-  fstFieldSetting <- pFieldSetting
-  fieldSettings   <- optional (MP.some (lexeme (char ',') *> pFieldSetting))
-  lexeme (char ']')
-  return (fstFieldSetting : fromMaybe [] fieldSettings)
-
-pFieldSetting :: Parser FieldSetting
-pFieldSetting = 
-  (FieldNotNull <$ (lexeme (string' "not") *> lexeme (string' "null")))
-  <|> (FieldNull <$ lexeme (string' "null"))
-  <|> (FieldPk <$ ((lexeme (string' "primary") *> lexeme (string' "key")) <|> lexeme (string' "pk")))
-  <|> (FieldUnique <$ lexeme (string' "unique"))
-  <|> (FieldIncrement <$ lexeme (string' "increment"))
-  <|> (FieldNote <$> pNoteInline)
-  <|> (FieldRefInline <$> pRefInline)
-  <|> (FieldDefault <$> pFieldDefault)
-
-pEnum :: Parser DBML.Enum
-pEnum = do
-  enum
-  enumName <- identifier
-  lexeme (char '{')
-  enumValues <- MP.many pEnumValue
-  lexeme (char '}')
-  return Enum {..}
-
-pEnumValue :: Parser EnumValue
-pEnumValue = do
-  enumValue <- identifier
-  enumValueSettings <- optional pEnumValueSettings
-  return EnumValue {..}
-
-pEnumValueSettings :: Parser [EnumValueSetting]
-pEnumValueSettings = do
-  lexeme (char '[')
-  fstEnumSetting <- pEnumValueSetting
-  enumSettings   <- optional (MP.some (lexeme (char ',') *> pEnumValueSetting))
-  lexeme (char ']')
-  return (fstEnumSetting : fromMaybe [] enumSettings)
-
-pEnumValueSetting :: Parser EnumValueSetting
-pEnumValueSetting = EnumValueNote <$> pNoteInline
-
-pIndexes :: Parser [Index]
-pIndexes =
-  indexes *> between (lexeme (char '{')) (lexeme (char '}')) (MP.many pIndex)
-
-pIndex :: Parser Index
-pIndex = do
-  ms               <- optional . try $ pIndexIdentifier
-  indexIdentifiers <- maybe pIndexIdentifiers (return . return) ms
-  indexSettings    <- optional pIndexSettings
-  return Index { .. }
-
-pIndexIdentifiers :: Parser [IndexIdentifier]
-pIndexIdentifiers = do
-  lexeme (char '(')
-  fstIdxIdentifier <- pIndexIdentifier
-  idxIdentifiers   <- optional (MP.some (lexeme (char ',') *> pIndexIdentifier))
-  lexeme (char ')')
-  return (fstIdxIdentifier : fromMaybe [] idxIdentifiers)
-
-pIndexIdentifier :: Parser IndexIdentifier
-pIndexIdentifier =
-  (IndexColumn <$> identifier) <|> (IndexExpr <$> expressionLiteral)
-
-pIndexSettings :: Parser [IndexSetting]
-pIndexSettings = do
-  lexeme (char '[')
-  fstIndexSetting <- pIndexSetting
-  indexSettings   <- optional (MP.some (lexeme (char ',') *> pIndexSetting))
-  lexeme (char ']')
-  return (fstIndexSetting : fromMaybe [] indexSettings)
-
-pIndexSetting :: Parser IndexSetting
-pIndexSetting =
-  (IndexPk <$ lexeme (string' "pk"))
-    <|> (IndexUnique <$ lexeme (string' "unique"))
-    <|> (IndexName <$> pNameInline)
-    <|> (IndexType <$> pIndexType)
-
-pHeaderColorInline :: Parser Text
-pHeaderColorInline = lexeme (string' "headercolor") *> lexeme (char ':') *> stringLiteral
-
-pNameInline :: Parser Text
-pNameInline = lexeme (string' "name") *> lexeme (char ':') *> stringLiteral
-
-pNoteInline :: Parser Text
-pNoteInline = lexeme (string' "note") *> lexeme (char ':') *> stringLiteral
-
-pIndexType :: Parser IndexType
-pIndexType = lexeme (string' "type") *> lexeme (char ':') *> try
-  ((BTree <$ lexeme (string "btree")) <|> (Hash <$ lexeme (string "hash")))
-
-pRefInline :: Parser RefInline
-pRefInline = do
-  lexeme (string' "ref")
-  lexeme (char ':')
-  refInlineRelation <- pRefRelation
-  refInlineTableName <- identifier
-  lexeme (char '.')
-  refInlineFieldName <- identifier
-  return RefInline { .. }
-
-pRefRelation :: Parser RefRelation
-pRefRelation = (OneToMany <$> lexeme (char '<'))
-  <|> (ManyToOne <$> lexeme (char '>'))
-  <|> (OneToOne <$> lexeme (char '-'))
-
-pFieldDefault :: Parser DefaultType
-pFieldDefault =
-  lexeme (string' "default")
-    *> lexeme (char ':')
-    *> (   (DefaultString <$> stringLiteral)
-       <|> (DefaultExpr <$> expressionLiteral)
-       <|> (DefaultBool <$> booleanLiteral)
-       <|> (DefaultNum <$> numberLiteral)
-       <|> (DefaultNull <$ lexeme (string' "null"))
-       )
-
-pAlias :: Parser Text
-pAlias = as *> identifier
+getFieldMap :: Table -> Id -> DBMLMonad (Map.Map Id NField)
+getFieldMap table id = Map.fromList <$> mapM buildField fields
+ where
+  fields = filter isField (fromMaybe [] (tableValues table))
+  isField (TableField _) = True
+  isField _              = False
+  buildField (TableField field) = do
+    state <- get
+    let fieldId = fieldIdCounter state
+    put state { fieldIdCounter = fieldId + 1 }
+    newState <- get
+    return
+      ( fieldId
+      , NField { nfId            = fieldId
+               , nfTableId       = id
+               , nfEnumId        = Nothing
+               , nfName          = fieldName field
+               , nfType          = fieldType field
+               , nfFieldSettings = fieldSettings field
+               }
+      )
