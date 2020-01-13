@@ -15,8 +15,9 @@ module DBML.Parser
   , RefSetting
   , FieldSetting
   , IndexSetting
-  , IndexIdentifier
+  , IndexIdentifier (..)
   , Field (..)
+  , Index (..)
   )
 where
 

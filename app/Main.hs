@@ -23,5 +23,6 @@ main = do
       , refIdCounter = 0
       , tableGroupIdCounter = 0
       , fieldIdCounter = 0
+      , indexIdCounter = 0
       })
     Left e -> print e 

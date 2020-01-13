@@ -35,6 +35,7 @@ data DBMLState = DBMLState
   , refIdCounter :: Id
   , tableGroupIdCounter :: Id
   , fieldIdCounter :: Id
+  , indexIdCounter :: Id
   } deriving (Show)
 
 data NTable = NTable
@@ -43,7 +44,7 @@ data NTable = NTable
   , ntName :: Text
   , ntTableSettings :: Maybe [TableSetting]
   , ntFieldIds :: [Id]
-  -- , ntIndexIds :: [Id]
+  , ntIndexIds :: [Id]
   } deriving (Show)
 
 data NEnum = NEnum
@@ -78,8 +79,9 @@ data NField = NField
 
 data NIndex = NIndex
   { niId :: Id
+  , niTableId :: Id
   , niIndexSettings :: Maybe [IndexSetting]
-  , niIndexIdentifiers :: Maybe [IndexIdentifier]
+  , niIndexIdentifiers :: [IndexIdentifier]
   } deriving (Show)
 
 type DBMLMonad = StateT DBMLState (Either Text)
@@ -105,19 +107,13 @@ getTableMap (Database xs) = Map.fromList <$> mapM buildTable tables
     let tableId = tableIdCounter state
     put state { tableIdCounter = tableId + 1 }
     fieldMap <- getFieldMap table tableId
-    case allDifferent (map (nfName . snd) (Map.toList fieldMap)) of
-      Left fname -> lift
-        (        Left
-        $        "Field "
-        `T.append` fname
-        `T.append` " existed in table "
-        `T.append` tableName table
-        )
-      _ -> lift (Right ())
+    validateFieldsInTable table (map snd (Map.toList fieldMap))
     state1 <- get
     put state1 { fieldS = Map.union (fieldS state1) fieldMap }
-    -- indexMap <- getIndexMap table (ntId nTable)
-    -- put state { indexS = Map.union (indexS state) indexMap }
+    indexMap <- getIndexMap table tableId
+    validateIndexesInTable table (map snd (Map.toList indexMap))
+    state2 <- get
+    put state2 { indexS = Map.union (indexS state2) indexMap }
     return
       ( tableId
       , NTable { ntId            = tableIdCounter state
@@ -125,8 +121,45 @@ getTableMap (Database xs) = Map.fromList <$> mapM buildTable tables
                , ntName          = tableName table
                , ntTableSettings = tableSettings table
                , ntFieldIds      = map fst (Map.toList fieldMap)
+               , ntIndexIds      = map fst (Map.toList indexMap)
                }
       )
+
+validateFieldsInTable :: Table -> [NField] -> DBMLMonad ()
+validateFieldsInTable table fields = case allDifferent (map nfName fields) of
+  Left fname -> lift
+    (          Left
+    $          "Field "
+    `T.append` fname
+    `T.append` " existed in table "
+    `T.append` tableName table
+    )
+  _ -> lift (Right ())
+
+validateIndexesInTable :: Table -> [NIndex] -> DBMLMonad ()
+validateIndexesInTable table indexes =
+  case
+      subList (map getIndexColumnName indexColumns) (map getFieldName fields)
+    of
+      Left iName -> lift
+        (          Left
+        $          "Index Column "
+        `T.append` iName
+        `T.append` " do not exist in table "
+        `T.append` tableName table
+        )
+      _ -> lift (Right ())
+ where
+  fields = filter isField (fromMaybe [] (tableValues table))
+  isField (TableField _) = True
+  isField _              = False
+  indexColumns = concatMap indexColumn indexes
+  indexColumn index = filter isIndexColumn (niIndexIdentifiers index)
+  isIndexColumn (IndexColumn _) = True
+  isIndexColumn _               = False
+  getIndexColumnName (IndexColumn c) = c
+  getFieldName (TableField f) = fieldName f
+
 
 getFieldMap :: Table -> Id -> DBMLMonad (Map.Map Id NField)
 getFieldMap table id = Map.fromList <$> mapM buildField fields
@@ -138,7 +171,6 @@ getFieldMap table id = Map.fromList <$> mapM buildField fields
     state <- get
     let fieldId = fieldIdCounter state
     put state { fieldIdCounter = fieldId + 1 }
-    newState <- get
     return
       ( fieldId
       , NField { nfId            = fieldId
@@ -147,5 +179,25 @@ getFieldMap table id = Map.fromList <$> mapM buildField fields
                , nfName          = fieldName field
                , nfType          = fieldType field
                , nfFieldSettings = fieldSettings field
+               }
+      )
+
+getIndexMap :: Table -> Id -> DBMLMonad (Map.Map Id NIndex)
+getIndexMap table id = Map.fromList <$> mapM buildIndex indexes
+ where
+  indexes = concatMap (\(TableIndexes xs) -> xs)
+                      (filter isIndex (fromMaybe [] (tableValues table)))
+  isIndex (TableIndexes _) = True
+  isIndex _                = False
+  buildIndex index = do
+    state <- get
+    let indexId = indexIdCounter state
+    put state { indexIdCounter = indexId + 1 }
+    return
+      ( indexId
+      , NIndex { niId               = indexId
+               , niTableId          = id
+               , niIndexIdentifiers = indexIdentifiers index
+               , niIndexSettings    = indexSettings index
                }
       )
