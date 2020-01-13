@@ -11,7 +11,7 @@ main :: IO ()
 main = do
   dbml <- getLine
   case parse (T.pack dbml) of
-    Right db -> print (execStateT (processTables db) DBMLState 
+    Right db -> print (execStateT (normalize db) DBMLState 
       { tableS = Map.empty
       , enumS = Map.empty
       , refS = Map.empty

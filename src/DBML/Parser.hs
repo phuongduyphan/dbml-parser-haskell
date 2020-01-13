@@ -18,6 +18,7 @@ module DBML.Parser
   , IndexIdentifier (..)
   , Field (..)
   , Index (..)
+  , EnumValue (..)
   )
 where
 

@@ -2,7 +2,7 @@
 
 module DBML
   ( DBML.parse
-  , processTables
+  , normalize
   , DBMLState(..)
   )
 where
@@ -50,7 +50,7 @@ data NTable = NTable
 data NEnum = NEnum
   { neId :: Id
   , neName :: Text
-  , neValueIds :: [Id]
+  , neValues :: [EnumValue]
   , neFieldIds :: [Id]
   } deriving (Show)
 
@@ -89,11 +89,14 @@ type DBMLMonad = StateT DBMLState (Either Text)
 parse :: Text -> Either (ParseErrorBundle Text Void) Database
 parse = MP.parse pDatabase ""
 
-processTables :: Database -> DBMLMonad ()
-processTables db = do
+normalize :: Database -> DBMLMonad ()
+normalize db = do
   tableMap <- getTableMap db
   state    <- get
   put state { tableS = Map.union (tableS state) tableMap }
+  enumMap <- getEnumMap db
+  state1 <- get
+  put state1 { enumS = Map.union (enumS state) enumMap }
   return ()
 
 getTableMap :: Database -> DBMLMonad (Map.Map Id NTable)
@@ -201,3 +204,45 @@ getIndexMap table id = Map.fromList <$> mapM buildIndex indexes
                , niIndexSettings    = indexSettings index
                }
       )
+
+getEnumMap :: Database -> DBMLMonad (Map.Map Id NEnum)
+getEnumMap (Database xs) = Map.fromList <$> mapM buildEnum enums
+  where
+    enums = filter isEnum xs
+    isEnum (DBMLEnum _) = True
+    isEnum _ = False
+    buildEnum (DBMLEnum enum) = do
+      state <- get
+      let enumId = enumIdCounter state
+      put state { enumIdCounter = enumId + 1 }
+      validateEnumValueInEnum enum
+      fieldIds <- getEnumFieldIds enum enumId
+      return (enumId, NEnum
+        { neId = enumId
+        , neName = enumName enum
+        , neValues = enumValues enum
+        , neFieldIds = fieldIds
+        })
+
+
+validateEnumValueInEnum :: DBML.Parser.Enum -> DBMLMonad ()
+validateEnumValueInEnum enum = case allDifferent (map enumValue (enumValues enum)) of
+  Left val -> lift (Left ("Enum value " `T.append` "existed in enum " `T.append` enumName enum))
+  _ -> lift (Right ())
+
+getEnumFieldIds :: DBML.Parser.Enum -> Id -> DBMLMonad [Id]
+getEnumFieldIds enum id = do
+  state <- get
+  let fields = filter (\nf -> nfType nf == enumName enum) (map snd (Map.toList (fieldS state)))
+  mapM_ (updateFieldEnumId id) fields
+  return (map nfId fields)
+
+updateFieldEnumId :: Id -> NField -> DBMLMonad ()
+updateFieldEnumId enumId field = do
+  state <- get
+  let fieldMaybe = Map.lookup (nfId field) (fieldS state)
+  case fieldMaybe of
+    Nothing -> lift (Left ("Cannot find field with id " `T.append` (T.pack . show) (nfId field)))
+    Just field' -> do
+      put state { fieldS = Map.insert (nfId field') (field' { nfEnumId = Just enumId }) (fieldS state) }
+      return ()
