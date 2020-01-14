@@ -19,6 +19,7 @@ module DBML.Parser
   , Field (..)
   , Index (..)
   , EnumValue (..)
+  , TableGroupValue (..)
   )
 where
 
@@ -125,10 +126,10 @@ data Element = DBMLTable Table | DBMLEnum DBML.Parser.Enum | DBMLRef Ref | DBMLT
 newtype Database = Database [Element] deriving (Show)
 
 pDatabase :: Parser Database
-pDatabase = Database <$> MP.many pElement
+pDatabase = Database <$> MP.many pElement <* eof
 
 pElement :: Parser Element
-pElement = DBMLTable <$> pTable
+pElement = DBMLTable <$> try pTable
   <|> DBMLEnum <$> pEnum
   <|> DBMLRef <$> pRef
   <|> DBMLTableGroup <$> pTableGroup

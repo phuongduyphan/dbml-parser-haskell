@@ -15,7 +15,9 @@ import           Data.Void
 import           Data.Text                      ( Text )
 import qualified Data.Text                     as T
 import qualified Data.Map.Strict               as Map
-import           Data.Maybe                     ( fromMaybe )
+import           Data.Maybe                     ( fromMaybe
+                                                , isNothing
+                                                )
 import           Control.Monad.Trans.State.Lazy
 import           Control.Monad.Trans.Class      ( lift )
 import           Control.Monad                  ( liftM )
@@ -91,16 +93,13 @@ parse = MP.parse pDatabase ""
 
 normalize :: Database -> DBMLMonad ()
 normalize db = do
-  tableMap <- getTableMap db
-  state    <- get
-  put state { tableS = Map.union (tableS state) tableMap }
-  enumMap <- getEnumMap db
-  state1 <- get
-  put state1 { enumS = Map.union (enumS state) enumMap }
+  buildTableMap db
+  buildEnumMap db
+  buildTableGroupMap db
   return ()
 
-getTableMap :: Database -> DBMLMonad (Map.Map Id NTable)
-getTableMap (Database xs) = Map.fromList <$> mapM buildTable tables
+buildTableMap :: Database -> DBMLMonad ()
+buildTableMap (Database xs) = mapM_ buildTable tables
  where
   tables = filter isTable xs
   isTable (DBMLTable _) = True
@@ -115,18 +114,22 @@ getTableMap (Database xs) = Map.fromList <$> mapM buildTable tables
     put state1 { fieldS = Map.union (fieldS state1) fieldMap }
     indexMap <- getIndexMap table tableId
     validateIndexesInTable table (map snd (Map.toList indexMap))
+    let tableMap = Map.fromList
+          [ ( tableId
+            , NTable { ntId            = tableIdCounter state
+                     , ntGroupId       = Nothing
+                     , ntName          = tableName table
+                     , ntTableSettings = tableSettings table
+                     , ntFieldIds      = map fst (Map.toList fieldMap)
+                     , ntIndexIds      = map fst (Map.toList indexMap)
+                     }
+            )
+          ]
     state2 <- get
-    put state2 { indexS = Map.union (indexS state2) indexMap }
-    return
-      ( tableId
-      , NTable { ntId            = tableIdCounter state
-               , ntGroupId       = Nothing
-               , ntName          = tableName table
-               , ntTableSettings = tableSettings table
-               , ntFieldIds      = map fst (Map.toList fieldMap)
-               , ntIndexIds      = map fst (Map.toList indexMap)
+    put state2 { indexS = Map.union (indexS state2) indexMap
+               , tableS = Map.union (tableS state) tableMap
                }
-      )
+    return ()
 
 validateFieldsInTable :: Table -> [NField] -> DBMLMonad ()
 validateFieldsInTable table fields = case allDifferent (map nfName fields) of
@@ -205,35 +208,46 @@ getIndexMap table id = Map.fromList <$> mapM buildIndex indexes
                }
       )
 
-getEnumMap :: Database -> DBMLMonad (Map.Map Id NEnum)
-getEnumMap (Database xs) = Map.fromList <$> mapM buildEnum enums
-  where
-    enums = filter isEnum xs
-    isEnum (DBMLEnum _) = True
-    isEnum _ = False
-    buildEnum (DBMLEnum enum) = do
-      state <- get
-      let enumId = enumIdCounter state
-      put state { enumIdCounter = enumId + 1 }
-      validateEnumValueInEnum enum
-      fieldIds <- getEnumFieldIds enum enumId
-      return (enumId, NEnum
-        { neId = enumId
-        , neName = enumName enum
-        , neValues = enumValues enum
-        , neFieldIds = fieldIds
-        })
+buildEnumMap :: Database -> DBMLMonad ()
+buildEnumMap (Database xs) = mapM_ buildEnum enums
+ where
+  enums = filter isEnum xs
+  isEnum (DBMLEnum _) = True
+  isEnum _            = False
+  buildEnum (DBMLEnum enum) = do
+    state <- get
+    let enumId = enumIdCounter state
+    put state { enumIdCounter = enumId + 1 }
+    validateEnumValueInEnum enum
+    fieldIds <- getEnumFieldIds enum enumId
+    let enumMap = Map.fromList
+          [ ( enumId
+            , NEnum { neId       = enumId
+                    , neName     = enumName enum
+                    , neValues   = enumValues enum
+                    , neFieldIds = fieldIds
+                    }
+            )
+          ]
+    state1 <- get
+    put state1 { enumS = Map.union (enumS state1) enumMap }
+    return ()
 
 
 validateEnumValueInEnum :: DBML.Parser.Enum -> DBMLMonad ()
-validateEnumValueInEnum enum = case allDifferent (map enumValue (enumValues enum)) of
-  Left val -> lift (Left ("Enum value " `T.append` "existed in enum " `T.append` enumName enum))
-  _ -> lift (Right ())
+validateEnumValueInEnum enum =
+  case allDifferent (map enumValue (enumValues enum)) of
+    Left val -> lift
+      (Left
+        ("Enum value " `T.append` "existed in enum " `T.append` enumName enum)
+      )
+    _ -> lift (Right ())
 
 getEnumFieldIds :: DBML.Parser.Enum -> Id -> DBMLMonad [Id]
 getEnumFieldIds enum id = do
   state <- get
-  let fields = filter (\nf -> nfType nf == enumName enum) (map snd (Map.toList (fieldS state)))
+  let fields = filter (\nf -> nfType nf == enumName enum)
+                      (map snd (Map.toList (fieldS state)))
   mapM_ (updateFieldEnumId id) fields
   return (map nfId fields)
 
@@ -242,7 +256,84 @@ updateFieldEnumId enumId field = do
   state <- get
   let fieldMaybe = Map.lookup (nfId field) (fieldS state)
   case fieldMaybe of
-    Nothing -> lift (Left ("Cannot find field with id " `T.append` (T.pack . show) (nfId field)))
+    Nothing -> lift
+      (Left
+        ("Cannot find field with id " `T.append` (T.pack . show) (nfId field))
+      )
     Just field' -> do
-      put state { fieldS = Map.insert (nfId field') (field' { nfEnumId = Just enumId }) (fieldS state) }
+      put state
+        { fieldS = Map.insert (nfId field')
+                              (field' { nfEnumId = Just enumId })
+                              (fieldS state)
+        }
+      return ()
+
+buildTableGroupMap :: Database -> DBMLMonad ()
+buildTableGroupMap (Database xs) = mapM_ buildTableGroup tableGroups
+ where
+  tableGroups = filter isTableGroup xs
+  isTableGroup (DBMLTableGroup _) = True
+  isTableGroup _                  = False
+  buildTableGroup (DBMLTableGroup tg) = do
+    state <- get
+    let tgId = tableGroupIdCounter state
+    put state { tableGroupIdCounter = tgId + 1 }
+    validateTableInTg tg (map snd (Map.toList (tableS state)))
+    tableIds <- getTgTableIds tg tgId
+    let tgMap = Map.fromList
+          [ ( tgId
+            , NTableGroup { ntgId       = tgId
+                          , ntgName     = tableGroupName tg
+                          , ntgTableIds = tableIds
+                          }
+            )
+          ]
+    state1 <- get
+    put state1 { tableGroupS = Map.union (tableGroupS state1) tgMap }
+    return ()
+
+validateTableInTg :: TableGroup -> [NTable] -> DBMLMonad ()
+validateTableInTg tg tables = do
+  case subList (map tgTableName (tableGroupValues tg)) (map ntName tables) of
+    Left tName -> lift (Left ("Table " `T.append` tName `T.append` " don't exist"))
+    _          -> return ()
+  case allDifferent (map tgTableName (tableGroupValues tg)) of
+    Left tName' -> lift (Left ("Table " `T.append` tName' `T.append` " is already in the group"))
+    _           -> return ()
+  state <- get
+  case allSatisfy (isNothing . fst) (map (\t -> (ntGroupId t, ntName t)) tables) of
+    Left (Just groupId, tableName) -> lift
+      (Left
+        ("Table " `T.append` tableName `T.append` " is already in group " `T.append` maybe
+          ""
+          ntgName
+          (Map.lookup groupId (tableGroupS state))
+        )
+      )
+    _ -> return ()
+
+getTgTableIds :: TableGroup -> Id -> DBMLMonad [Id]
+getTgTableIds tg id = do
+  state <- get
+  let tables = filter
+        (\nt -> ntName nt `elem` map tgTableName (tableGroupValues tg))
+        (map snd (Map.toList (tableS state)))
+  mapM_ (updateTableTgId id) tables
+  return (map ntId tables)
+
+updateTableTgId :: Id -> NTable -> DBMLMonad ()
+updateTableTgId tgId table = do
+  state <- get
+  let tableMaybe = Map.lookup (ntId table) (tableS state)
+  case tableMaybe of
+    Nothing -> lift
+      (Left
+        ("Cannot find table with id " `T.append` (T.pack . show) (ntId table))
+      )
+    Just table' -> do
+      put state
+        { tableS = Map.insert (ntId table')
+                              (table' { ntGroupId = Just tgId })
+                              (tableS state)
+        }
       return ()
