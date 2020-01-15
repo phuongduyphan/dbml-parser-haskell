@@ -18,6 +18,7 @@ import qualified Data.Map.Strict               as Map
 import           Data.Maybe                     ( fromMaybe
                                                 , isNothing
                                                 )
+import           Data.List                      ( find )
 import           Control.Monad.Trans.State.Lazy
 import           Control.Monad.Trans.Class      ( lift )
 import           Control.Monad                  ( liftM )
@@ -32,12 +33,14 @@ data DBMLState = DBMLState
   , tableGroupS :: Map.Map Id NTableGroup
   , fieldS :: Map.Map Id NField
   , indexS :: Map.Map Id NIndex
+  , endpointS :: Map.Map Id NEndpoint
   , tableIdCounter :: Id
   , enumIdCounter :: Id
   , refIdCounter :: Id
   , tableGroupIdCounter :: Id
   , fieldIdCounter :: Id
   , indexIdCounter :: Id
+  , endpointIdCounter :: Id
   } deriving (Show)
 
 data NTable = NTable
@@ -62,6 +65,14 @@ data NRef = NRef
   , nrValueRelation :: RefRelation
   , nrValueSettings :: Maybe [RefSetting]
   , nrEndpointIds :: [Id]
+  } deriving (Show)
+
+data NEndpoint = NEndpoint
+  { nepId :: Id
+  , nepTableName :: Text
+  , nepFieldName :: Text
+  , nepRefId :: Id
+  , nepFieldId :: Id
   } deriving (Show)
 
 data NTableGroup = NTableGroup
@@ -96,6 +107,7 @@ normalize db = do
   buildTableMap db
   buildEnumMap db
   buildTableGroupMap db
+  buildRefMap db
   return ()
 
 buildTableMap :: Database -> DBMLMonad ()
@@ -295,22 +307,28 @@ buildTableGroupMap (Database xs) = mapM_ buildTableGroup tableGroups
 validateTableInTg :: TableGroup -> [NTable] -> DBMLMonad ()
 validateTableInTg tg tables = do
   case subList (map tgTableName (tableGroupValues tg)) (map ntName tables) of
-    Left tName -> lift (Left ("Table " `T.append` tName `T.append` " don't exist"))
-    _          -> return ()
-  case allDifferent (map tgTableName (tableGroupValues tg)) of
-    Left tName' -> lift (Left ("Table " `T.append` tName' `T.append` " is already in the group"))
-    _           -> return ()
-  state <- get
-  case allSatisfy (isNothing . fst) (map (\t -> (ntGroupId t, ntName t)) tables) of
-    Left (Just groupId, tableName) -> lift
-      (Left
-        ("Table " `T.append` tableName `T.append` " is already in group " `T.append` maybe
-          ""
-          ntgName
-          (Map.lookup groupId (tableGroupS state))
-        )
-      )
+    Left tName ->
+      lift (Left ("Table " `T.append` tName `T.append` " don't exist"))
     _ -> return ()
+  case allDifferent (map tgTableName (tableGroupValues tg)) of
+    Left tName' ->
+      lift
+        (Left ("Table " `T.append` tName' `T.append` " is already in the group")
+        )
+    _ -> return ()
+  state <- get
+  case
+      allSatisfy (isNothing . fst) (map (\t -> (ntGroupId t, ntName t)) tables)
+    of
+      Left (Just groupId, tableName) -> lift
+        (Left
+          (          "Table "
+          `T.append` tableName
+          `T.append` " is already in group "
+          `T.append` maybe "" ntgName (Map.lookup groupId (tableGroupS state))
+          )
+        )
+      _ -> return ()
 
 getTgTableIds :: TableGroup -> Id -> DBMLMonad [Id]
 getTgTableIds tg id = do
@@ -337,3 +355,128 @@ updateTableTgId tgId table = do
                               (tableS state)
         }
       return ()
+
+buildRefMap :: Database -> DBMLMonad ()
+buildRefMap (Database xs) = mapM_ buildRef (refs ++ inlineRefs)
+ where
+  refs = map (\(DBMLRef r) -> r) (filter isRef xs)
+  isRef (DBMLRef _) = True
+  isRef _           = False
+  inlineRefs = getInlineRefs (Database xs)
+  buildRef ref = do
+    state <- get
+    let refId = refIdCounter state
+    put state { refIdCounter = refId + 1 }
+    endpointMap <- getEndPointMap ref refId
+    let refMap = Map.fromList
+          [ ( refId
+            , NRef { nrId            = refId
+                   , nrName          = refName ref
+                   , nrValueRelation = refValueRelation (refValue ref)
+                   , nrValueSettings = refValueSettings (refValue ref)
+                   , nrEndpointIds   = map fst (Map.toList endpointMap)
+                   }
+            )
+          ]
+    state1 <- get
+    put state1 { refS      = Map.union (refS state1) refMap
+               , endpointS = Map.union (endpointS state1) endpointMap
+               }
+    return ()
+
+getInlineRefs :: Database -> [Ref]
+getInlineRefs (Database xs) = concatMap getInlineRefsFromTable tables
+ where
+  tables = map (\(DBMLTable t) -> t) (filter isTable xs)
+  isTable (DBMLTable _) = True
+  isTable _             = False
+  getInlineRefsFromTable table = case tableValues table of
+    Nothing       -> []
+    Just tbValues -> concatMap (getInlineRefsFromField . (\(TableField f) -> f)) (filter isTableField tbValues)
+   where
+    getInlineRefsFromField field = case fieldSettings field of
+      Nothing        -> []
+      Just fSettings -> case find isFieldRefInline fSettings of
+        Nothing -> []
+        Just (FieldRefInline inlineRef) ->
+          [ (Ref
+              { refName  = Nothing
+              , refValue =
+                RefValue
+                  { refValueEndpoints =
+                    [ RefEndpoint { endpointTableName = tableName table
+                                  , endpointFieldName = fieldName field
+                                  }
+                    , RefEndpoint
+                      { endpointTableName = refInlineTableName inlineRef
+                      , endpointFieldName = refInlineFieldName inlineRef
+                      }
+                    ]
+                  , refValueRelation  = refInlineRelation inlineRef
+                  , refValueSettings  = Nothing
+                  }
+              }
+            )
+          ]
+    isFieldRefInline (FieldRefInline _) = True
+    isFieldRefInline _                  = False
+  isTableField (TableField _) = True
+  isTableField _              = False
+
+getEndPointMap :: Ref -> Id -> DBMLMonad (Map.Map Id NEndpoint)
+getEndPointMap ref id = Map.fromList <$> mapM buildEndpoint endpoints
+ where
+  endpoints = refValueEndpoints (refValue ref)
+  buildEndpoint endpoint = do
+    state <- get
+    let endpointId = endpointIdCounter state
+    put state { endpointIdCounter = endpointId + 1 }
+    field <- findEndpointField endpoint
+    return
+      ( endpointId
+      , NEndpoint { nepId        = endpointId
+                  , nepTableName = endpointTableName endpoint
+                  , nepFieldName = endpointFieldName endpoint
+                  , nepRefId     = id
+                  , nepFieldId   = nfId field
+                  }
+      )
+
+findEndpointField :: RefEndpoint -> DBMLMonad NField
+findEndpointField endpoint = do
+  state <- get
+  let tableMaybe = find
+        (\table -> ntName table == endpointTableName endpoint)
+        (map snd (Map.toList (tableS state)))
+  case tableMaybe of
+    Nothing -> lift
+      (Left
+        (          "Cannot find table "
+        `T.append` (T.pack . show) (endpointTableName endpoint)
+        `T.append` " in schema"
+        )
+      )
+    Just table -> do
+      fields <- mapM findFieldById (ntFieldIds table)
+      let fieldMaybe =
+            find (\field -> nfName field == endpointFieldName endpoint) fields
+      case fieldMaybe of
+        Nothing -> lift
+          (Left
+            (          "Cannot find field "
+            `T.append` (T.pack . show) (endpointFieldName endpoint)
+            `T.append` " in table "
+            `T.append` (T.pack . show) (ntName table)
+            )
+          )
+        Just field -> return field
+
+findFieldById :: Id -> DBMLMonad NField
+findFieldById id = do
+  state <- get
+  let fieldMaybe = Map.lookup id (fieldS state)
+  case fieldMaybe of
+    Nothing ->
+      lift (Left ("Cannot find field with id " `T.append` (T.pack . show) id))
+    Just field -> return field
+

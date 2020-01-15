@@ -13,13 +13,16 @@ module DBML.Parser
   , TableValue (..)
   , RefRelation
   , RefSetting
-  , FieldSetting
+  , FieldSetting (..)
   , IndexSetting
   , IndexIdentifier (..)
   , Field (..)
   , Index (..)
   , EnumValue (..)
   , TableGroupValue (..)
+  , RefValue (..)
+  , RefEndpoint (..)
+  , RefInline (..)
   )
 where
 
@@ -37,14 +40,6 @@ data DefaultType = DefaultString Text
   | DefaultNum Scientific
   | DefaultBool Boolean
   | DefaultNull deriving (Show)
-
-data RefRelation = OneToMany Char | ManyToOne Char | OneToOne Char deriving (Show)
-
-data RefInline = RefInline
-  { refInlineTableName :: Text
-  , refInlineFieldName :: Text
-  , refInlineRelation :: RefRelation
-  } deriving (Show)
 
 data IndexType = BTree | Hash deriving (Show)
 
@@ -112,6 +107,14 @@ data RefValue = RefValue
 data Ref = Ref 
   { refName :: Maybe Text
   , refValue :: RefValue
+  } deriving (Show)
+
+data RefRelation = OneToMany Char | ManyToOne Char | OneToOne Char deriving (Show)
+
+data RefInline = RefInline
+  { refInlineTableName :: Text
+  , refInlineFieldName :: Text
+  , refInlineRelation :: RefRelation
   } deriving (Show)
 
 newtype TableGroupValue = TableGroupValue { tgTableName :: Text } deriving (Show)
