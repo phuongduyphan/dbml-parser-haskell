@@ -2,27 +2,27 @@
 {-# LANGUAGE RecordWildCards   #-}
 
 module DBML.Parser
-  ( pDatabase
-  , Database (..)
-  , Element (..)
-  , Table (..)
-  , DBML.Parser.Enum (..)
-  , Ref (..)
-  , TableGroup (..)
+  ( DBML.Parser.parse
+  , Database(..)
+  , Element(..)
+  , Table(..)
+  , DBML.Parser.Enum(..)
+  , Ref(..)
+  , TableGroup(..)
   , TableSetting
-  , TableValue (..)
+  , TableValue(..)
   , RefRelation
   , RefSetting
-  , FieldSetting (..)
+  , FieldSetting(..)
   , IndexSetting
-  , IndexIdentifier (..)
-  , Field (..)
-  , Index (..)
-  , EnumValue (..)
-  , TableGroupValue (..)
-  , RefValue (..)
-  , RefEndpoint (..)
-  , RefInline (..)
+  , IndexIdentifier(..)
+  , Field(..)
+  , Index(..)
+  , EnumValue(..)
+  , TableGroupValue(..)
+  , RefValue(..)
+  , RefEndpoint(..)
+  , RefInline(..)
   )
 where
 
@@ -34,6 +34,7 @@ import           Text.Megaparsec.Char
 import           Text.Megaparsec               as MP
 import           Data.Scientific                ( Scientific )
 import           Data.Maybe                     ( fromMaybe )
+import           Data.Void                      ( Void )
 
 data DefaultType = DefaultString Text
   | DefaultExpr Expression
@@ -53,11 +54,11 @@ data Index = Index
   } deriving (Show)
 
 data FieldSetting = FieldNotNull
-  | FieldNull 
-  | FieldPk 
-  | FieldUnique 
-  | FieldIncrement 
-  | FieldNote Text 
+  | FieldNull
+  | FieldPk
+  | FieldUnique
+  | FieldIncrement
+  | FieldNote Text
   | FieldRefInline RefInline
   | FieldDefault DefaultType deriving (Show)
 
@@ -68,7 +69,7 @@ data EnumValue = EnumValue
   , enumValueSettings :: Maybe [EnumValueSetting]
   } deriving (Show)
 
-data Enum = Enum 
+data Enum = Enum
   { enumName :: Text
   , enumValues :: [EnumValue]
   } deriving (Show)
@@ -83,8 +84,8 @@ data TableValue = TableField Field | TableIndexes [Index] deriving (Show)
 
 data TableSetting = TableHeaderColor Color | TableNote Text deriving (Show)
 
-data Table = Table 
-  { tableName :: Text 
+data Table = Table
+  { tableName :: Text
   , tableSettings :: Maybe [TableSetting]
   , tableValues :: Maybe [TableValue]
   } deriving (Show)
@@ -93,9 +94,9 @@ data RefAction = NoAction | Restrict | Cascade | SetNull | SetDefault deriving (
 
 data RefSetting = RefOnUpdate RefAction | RefOnDelete RefAction deriving (Show)
 
-data RefEndpoint = RefEndpoint 
+data RefEndpoint = RefEndpoint
   { endpointTableName :: Text
-  , endpointFieldName :: Text 
+  , endpointFieldName :: Text
   } deriving (Show)
 
 data RefValue = RefValue
@@ -104,7 +105,7 @@ data RefValue = RefValue
   , refValueSettings :: Maybe [RefSetting]
   } deriving (Show)
 
-data Ref = Ref 
+data Ref = Ref
   { refName :: Maybe Text
   , refValue :: RefValue
   } deriving (Show)
@@ -128,14 +129,22 @@ data Element = DBMLTable Table | DBMLEnum DBML.Parser.Enum | DBMLRef Ref | DBMLT
 
 newtype Database = Database [Element] deriving (Show)
 
+parse :: Text -> Either (ParseErrorBundle Text Void) Database
+parse = MP.parse pDatabase ""
+
 pDatabase :: Parser Database
 pDatabase = sc *> (Database <$> MP.many pElement <* eof)
 
 pElement :: Parser Element
-pElement = DBMLTable <$> try pTable
-  <|> DBMLEnum <$> pEnum
-  <|> DBMLRef <$> pRef
-  <|> DBMLTableGroup <$> pTableGroup
+pElement =
+  DBMLTable
+    <$> try pTable
+    <|> DBMLEnum
+    <$> pEnum
+    <|> DBMLRef
+    <$> pRef
+    <|> DBMLTableGroup
+    <$> pTableGroup
 
 pTableGroup :: Parser TableGroup
 pTableGroup = do
@@ -144,12 +153,12 @@ pTableGroup = do
   lexeme (char '{')
   tableGroupValues <- MP.many pTableGroupValue
   lexeme (char '}')
-  return TableGroup {..}
+  return TableGroup { .. }
 
 pTableGroupValue :: Parser TableGroupValue
 pTableGroupValue = do
   tgTableName <- identifier
-  return TableGroupValue {..}
+  return TableGroupValue { .. }
 
 pRef :: Parser Ref
 pRef = try pRefLong <|> pRefShort
@@ -161,7 +170,7 @@ pRefLong = do
   lexeme (char '{')
   refValue <- pRefValue
   lexeme (char '}')
-  return Ref {..}
+  return Ref { .. }
 
 pRefShort :: Parser Ref
 pRefShort = do
@@ -169,14 +178,14 @@ pRefShort = do
   refName <- optional identifier
   lexeme (char ':')
   refValue <- pRefValue
-  return Ref {..}
+  return Ref { .. }
 
 pRefValue :: Parser RefValue
 pRefValue = do
   refEndpoint1 <- pRefEndpoint
-  refRelation <- pRefRelation
+  refRelation  <- pRefRelation
   refEndpoint2 <- pRefEndpoint
-  refSettings <- optional pRefSettings
+  refSettings  <- optional pRefSettings
   return (RefValue [refEndpoint1, refEndpoint2] refRelation refSettings)
 
 pRefEndpoint :: Parser RefEndpoint
@@ -184,36 +193,42 @@ pRefEndpoint = do
   endpointTableName <- identifier
   lexeme (char '.')
   endpointFieldName <- identifier
-  return RefEndpoint {..}
+  return RefEndpoint { .. }
 
 pRefSettings :: Parser [RefSetting]
 pRefSettings = do
   lexeme (char '[')
   fstRefSetting <- pRefSetting
-  refSettings <- optional (MP.some (lexeme (char ',') *> pRefSetting))
+  refSettings   <- optional (MP.some (lexeme (char ',') *> pRefSetting))
   lexeme (char ']')
   return (fstRefSetting : fromMaybe [] refSettings)
 
 pRefSetting :: Parser RefSetting
-pRefSetting = (RefOnUpdate <$> (lexeme (string' "update") *> lexeme (char ':') *> pRefAction))
-  <|> (RefOnDelete <$> (lexeme (string' "delete") *> lexeme (char ':') *> pRefAction))
+pRefSetting =
+  (   RefOnUpdate
+    <$> (lexeme (string' "update") *> lexeme (char ':') *> pRefAction)
+    )
+    <|> (   RefOnDelete
+        <$> (lexeme (string' "delete") *> lexeme (char ':') *> pRefAction)
+        )
 
 pRefAction :: Parser RefAction
-pRefAction = (NoAction <$ (lexeme (string' "no") *> lexeme (string' "action")))
-  <|> (Restrict <$ lexeme (string' "restrict"))
-  <|> (Cascade <$ lexeme (string' "cascade"))
-  <|> (SetNull <$ (lexeme (string' "set") *> lexeme (string' "null")))
-  <|> (SetDefault <$ (lexeme (string' "set") *> lexeme (string' "default")))
+pRefAction =
+  (NoAction <$ (lexeme (string' "no") *> lexeme (string' "action")))
+    <|> (Restrict <$ lexeme (string' "restrict"))
+    <|> (Cascade <$ lexeme (string' "cascade"))
+    <|> (SetNull <$ (lexeme (string' "set") *> lexeme (string' "null")))
+    <|> (SetDefault <$ (lexeme (string' "set") *> lexeme (string' "default")))
 
 pTable :: Parser Table
 pTable = do
   table
-  tableName <- identifier
+  tableName     <- identifier
   tableSettings <- optional pTableSettings
   lexeme (char '{')
   tableValues <- optional $ MP.many pTableValue
   lexeme (char '}')
-  return Table {..}
+  return Table { .. }
 
 pTableSettings :: Parser [TableSetting]
 pTableSettings = do
@@ -224,19 +239,21 @@ pTableSettings = do
   return (fstTableSetting : fromMaybe [] tableSettings)
 
 pTableSetting :: Parser TableSetting
-pTableSetting = 
-  (TableHeaderColor <$> (lexeme (string' "headercolor") *> lexeme (char ':') *> colorLiteral))
-  <|> (TableNote <$> pNoteInline)
+pTableSetting =
+  (   TableHeaderColor
+    <$> (lexeme (string' "headercolor") *> lexeme (char ':') *> colorLiteral)
+    )
+    <|> (TableNote <$> pNoteInline)
 
 pTableValue :: Parser TableValue
 pTableValue = try (TableField <$> pField) <|> (TableIndexes <$> pIndexes)
 
 pField :: Parser Field
 pField = do
-  fieldName <- identifier
-  fieldType <- identifier
+  fieldName     <- identifier
+  fieldType     <- identifier
   fieldSettings <- optional pFieldSettings
-  return Field {..}
+  return Field { .. }
 
 pFieldSettings :: Parser [FieldSetting]
 pFieldSettings = do
@@ -247,15 +264,19 @@ pFieldSettings = do
   return (fstFieldSetting : fromMaybe [] fieldSettings)
 
 pFieldSetting :: Parser FieldSetting
-pFieldSetting = 
+pFieldSetting =
   (FieldNotNull <$ try (lexeme (string' "not") *> lexeme (string' "null")))
-  <|> (FieldNull <$ lexeme (string' "null"))
-  <|> (FieldPk <$ try ((lexeme (string' "primary") *> lexeme (string' "key")) <|> lexeme (string' "pk")))
-  <|> (FieldUnique <$ lexeme (string' "unique"))
-  <|> (FieldIncrement <$ lexeme (string' "increment"))
-  <|> (FieldNote <$> pNoteInline)
-  <|> (FieldRefInline <$> pRefInline)
-  <|> (FieldDefault <$> pFieldDefault)
+    <|> (FieldNull <$ lexeme (string' "null"))
+    <|> (FieldPk <$ try
+          (   (lexeme (string' "primary") *> lexeme (string' "key"))
+          <|> lexeme (string' "pk")
+          )
+        )
+    <|> (FieldUnique <$ lexeme (string' "unique"))
+    <|> (FieldIncrement <$ lexeme (string' "increment"))
+    <|> (FieldNote <$> pNoteInline)
+    <|> (FieldRefInline <$> pRefInline)
+    <|> (FieldDefault <$> pFieldDefault)
 
 pEnum :: Parser DBML.Parser.Enum
 pEnum = do
@@ -264,13 +285,13 @@ pEnum = do
   lexeme (char '{')
   enumValues <- MP.many pEnumValue
   lexeme (char '}')
-  return Enum {..}
+  return Enum { .. }
 
 pEnumValue :: Parser EnumValue
 pEnumValue = do
-  enumValue <- identifier
+  enumValue         <- identifier
   enumValueSettings <- optional pEnumValueSettings
-  return EnumValue {..}
+  return EnumValue { .. }
 
 pEnumValueSettings :: Parser [EnumValueSetting]
 pEnumValueSettings = do
@@ -322,7 +343,8 @@ pIndexSetting =
     <|> (IndexType <$> pIndexType)
 
 pHeaderColorInline :: Parser Text
-pHeaderColorInline = lexeme (string' "headercolor") *> lexeme (char ':') *> stringLiteral
+pHeaderColorInline =
+  lexeme (string' "headercolor") *> lexeme (char ':') *> stringLiteral
 
 pNameInline :: Parser Text
 pNameInline = lexeme (string' "name") *> lexeme (char ':') *> stringLiteral
@@ -338,16 +360,17 @@ pRefInline :: Parser RefInline
 pRefInline = do
   lexeme (string' "ref")
   lexeme (char ':')
-  refInlineRelation <- pRefRelation
+  refInlineRelation  <- pRefRelation
   refInlineTableName <- identifier
   lexeme (char '.')
   refInlineFieldName <- identifier
   return RefInline { .. }
 
 pRefRelation :: Parser RefRelation
-pRefRelation = (OneToMany <$> lexeme (char '<'))
-  <|> (ManyToOne <$> lexeme (char '>'))
-  <|> (OneToOne <$> lexeme (char '-'))
+pRefRelation =
+  (OneToMany <$> lexeme (char '<'))
+    <|> (ManyToOne <$> lexeme (char '>'))
+    <|> (OneToOne <$> lexeme (char '-'))
 
 pFieldDefault :: Parser DefaultType
 pFieldDefault =

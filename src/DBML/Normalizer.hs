@@ -2,7 +2,9 @@
 
 module DBML.Normalizer
   ( normalize
-  , DBMLNormalizedState(..)
+  , DBMLNormalizedState (..)
+  , Id
+  , NEnum (..)
   )
 where
 
