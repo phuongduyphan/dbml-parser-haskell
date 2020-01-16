@@ -129,7 +129,7 @@ data Element = DBMLTable Table | DBMLEnum DBML.Parser.Enum | DBMLRef Ref | DBMLT
 newtype Database = Database [Element] deriving (Show)
 
 pDatabase :: Parser Database
-pDatabase = Database <$> MP.many pElement <* eof
+pDatabase = sc *> (Database <$> MP.many pElement <* eof)
 
 pElement :: Parser Element
 pElement = DBMLTable <$> try pTable

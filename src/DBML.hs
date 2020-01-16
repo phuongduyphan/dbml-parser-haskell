@@ -21,7 +21,9 @@ import           Data.Maybe                     ( fromMaybe
 import           Data.List                      ( find )
 import           Control.Monad.Trans.State.Lazy
 import           Control.Monad.Trans.Class      ( lift )
-import           Control.Monad                  ( liftM )
+import           Control.Monad                  ( liftM
+                                                , when
+                                                )
 import           Debug.Trace                    ( trace )
 
 type Id = Int
@@ -117,6 +119,7 @@ buildTableMap (Database xs) = mapM_ buildTable tables
   isTable (DBMLTable _) = True
   isTable _             = False
   buildTable (DBMLTable table) = do
+    validateTableInSchema table
     state <- get
     let tableId = tableIdCounter state
     put state { tableIdCounter = tableId + 1 }
@@ -143,13 +146,19 @@ buildTableMap (Database xs) = mapM_ buildTable tables
                }
     return ()
 
+validateTableInSchema :: Table -> DBMLMonad ()
+validateTableInSchema table = do
+  state <- get
+  let tableNames = map (ntName . snd) (Map.toList (tableS state))
+  when (tableName table `elem` tableNames) $ lift (Left ("Table " `T.append` tableName table `T.append` " already existed"))
+
 validateFieldsInTable :: Table -> [NField] -> DBMLMonad ()
 validateFieldsInTable table fields = case allDifferent (map nfName fields) of
   Left fname -> lift
     (          Left
     $          "Field "
     `T.append` fname
-    `T.append` " existed in table "
+    `T.append` " already existed in table "
     `T.append` tableName table
     )
   _ -> lift (Right ())
@@ -161,7 +170,7 @@ validateIndexesInTable table indexes =
     of
       Left iName -> lift
         (          Left
-        $          "Index Column "
+        $          "Index field "
         `T.append` iName
         `T.append` " do not exist in table "
         `T.append` tableName table
@@ -227,6 +236,7 @@ buildEnumMap (Database xs) = mapM_ buildEnum enums
   isEnum (DBMLEnum _) = True
   isEnum _            = False
   buildEnum (DBMLEnum enum) = do
+    validateEnumInSchema enum
     state <- get
     let enumId = enumIdCounter state
     put state { enumIdCounter = enumId + 1 }
@@ -245,13 +255,19 @@ buildEnumMap (Database xs) = mapM_ buildEnum enums
     put state1 { enumS = Map.union (enumS state1) enumMap }
     return ()
 
+validateEnumInSchema :: DBML.Parser.Enum -> DBMLMonad ()
+validateEnumInSchema enum = do
+  state <- get
+  let enumNames = map (neName . snd) (Map.toList (enumS state))
+  when (enumName enum `elem` enumNames) $ lift (Left ("Enum " `T.append` enumName enum `T.append` " already existed"))
+
 
 validateEnumValueInEnum :: DBML.Parser.Enum -> DBMLMonad ()
 validateEnumValueInEnum enum =
   case allDifferent (map enumValue (enumValues enum)) of
     Left val -> lift
       (Left
-        ("Enum value " `T.append` "existed in enum " `T.append` enumName enum)
+        ("Enum value " `T.append` val `T.append` " already existed in enum " `T.append` enumName enum)
       )
     _ -> lift (Right ())
 
@@ -287,6 +303,7 @@ buildTableGroupMap (Database xs) = mapM_ buildTableGroup tableGroups
   isTableGroup (DBMLTableGroup _) = True
   isTableGroup _                  = False
   buildTableGroup (DBMLTableGroup tg) = do
+    validateTgInSchema tg
     state <- get
     let tgId = tableGroupIdCounter state
     put state { tableGroupIdCounter = tgId + 1 }
@@ -303,6 +320,12 @@ buildTableGroupMap (Database xs) = mapM_ buildTableGroup tableGroups
     state1 <- get
     put state1 { tableGroupS = Map.union (tableGroupS state1) tgMap }
     return ()
+
+validateTgInSchema :: TableGroup -> DBMLMonad ()
+validateTgInSchema tg = do
+  state <- get
+  let tgNames = map (ntgName . snd) (Map.toList (tableGroupS state))
+  when (tableGroupName tg `elem` tgNames) $ lift (Left ("TableGroup " `T.append` tableGroupName tg `T.append` " already existed"))
 
 validateTableInTg :: TableGroup -> [NTable] -> DBMLMonad ()
 validateTableInTg tg tables = do
@@ -356,6 +379,7 @@ updateTableTgId tgId table = do
         }
       return ()
 
+-- todo: validate ref in schema
 buildRefMap :: Database -> DBMLMonad ()
 buildRefMap (Database xs) = mapM_ buildRef (refs ++ inlineRefs)
  where
@@ -392,7 +416,9 @@ getInlineRefs (Database xs) = concatMap getInlineRefsFromTable tables
   isTable _             = False
   getInlineRefsFromTable table = case tableValues table of
     Nothing       -> []
-    Just tbValues -> concatMap (getInlineRefsFromField . (\(TableField f) -> f)) (filter isTableField tbValues)
+    Just tbValues -> concatMap
+      (getInlineRefsFromField . (\(TableField f) -> f))
+      (filter isTableField tbValues)
    where
     getInlineRefsFromField field = case fieldSettings field of
       Nothing        -> []
