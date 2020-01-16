@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
-module DBML.Lexer
+module DBML.Parser.Lexer
   ( sc
   , lexeme
   , stringLiteral
@@ -109,8 +109,8 @@ expressionLiteral =
 
 booleanLiteral :: Parser Boolean
 booleanLiteral =
-  (DBML.Lexer.True <$ lexeme (string "true"))
-    <|> (DBML.Lexer.False <$ lexeme (string "false"))
+  (DBML.Parser.Lexer.True <$ lexeme (string "true"))
+    <|> (DBML.Parser.Lexer.False <$ lexeme (string "false"))
 
 numberLiteral :: Parser Scientific
 numberLiteral = L.scientific

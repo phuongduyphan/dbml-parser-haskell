@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module DBML.Utils
   ( allDifferent
   , subList

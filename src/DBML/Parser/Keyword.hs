@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module DBML.Keyword
+module DBML.Parser.Keyword
   ( table
   , as
   , ref
@@ -10,7 +10,7 @@ module DBML.Keyword
   )
 where
 
-import           DBML.Lexer
+import           DBML.Parser.Lexer
 import           Data.Text                      ( Text )
 import           Text.Megaparsec.Char
 import           Control.Applicative

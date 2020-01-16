@@ -27,8 +27,8 @@ module DBML.Parser
 where
 
 import           Data.Text                      ( Text )
-import           DBML.Lexer
-import           DBML.Keyword
+import           DBML.Parser.Lexer
+import           DBML.Parser.Keyword
 import           Control.Applicative
 import           Text.Megaparsec.Char
 import           Text.Megaparsec               as MP
