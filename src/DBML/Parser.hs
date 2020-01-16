@@ -248,9 +248,9 @@ pFieldSettings = do
 
 pFieldSetting :: Parser FieldSetting
 pFieldSetting = 
-  (FieldNotNull <$ (lexeme (string' "not") *> lexeme (string' "null")))
+  (FieldNotNull <$ try (lexeme (string' "not") *> lexeme (string' "null")))
   <|> (FieldNull <$ lexeme (string' "null"))
-  <|> (FieldPk <$ ((lexeme (string' "primary") *> lexeme (string' "key")) <|> lexeme (string' "pk")))
+  <|> (FieldPk <$ try ((lexeme (string' "primary") *> lexeme (string' "key")) <|> lexeme (string' "pk")))
   <|> (FieldUnique <$ lexeme (string' "unique"))
   <|> (FieldIncrement <$ lexeme (string' "increment"))
   <|> (FieldNote <$> pNoteInline)
