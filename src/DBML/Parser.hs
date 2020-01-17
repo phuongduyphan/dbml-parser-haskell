@@ -11,10 +11,10 @@ module DBML.Parser
   , TableGroup(..)
   , TableSetting
   , TableValue(..)
-  , RefRelation
-  , RefSetting
+  , RefRelation(..)
+  , RefSetting(..)
   , FieldSetting(..)
-  , IndexSetting
+  , IndexSetting(..)
   , IndexIdentifier(..)
   , Field(..)
   , Index(..)
@@ -23,6 +23,8 @@ module DBML.Parser
   , RefValue(..)
   , RefEndpoint(..)
   , RefInline(..)
+  , DefaultType(..)
+  , RefAction(..)
   )
 where
 
@@ -39,7 +41,7 @@ import           Data.Void                      ( Void )
 data DefaultType = DefaultString Text
   | DefaultExpr Expression
   | DefaultNum Scientific
-  | DefaultBool Boolean
+  | DefaultBool Bool
   | DefaultNull deriving (Show)
 
 data IndexType = BTree | Hash deriving (Show)
@@ -100,7 +102,7 @@ data RefEndpoint = RefEndpoint
   } deriving (Show)
 
 data RefValue = RefValue
-  { refValueEndpoints :: [RefEndpoint]
+  { refValueEndpoints :: (RefEndpoint, RefEndpoint)
   , refValueRelation :: RefRelation
   , refValueSettings :: Maybe [RefSetting]
   } deriving (Show)
@@ -186,7 +188,7 @@ pRefValue = do
   refRelation  <- pRefRelation
   refEndpoint2 <- pRefEndpoint
   refSettings  <- optional pRefSettings
-  return (RefValue [refEndpoint1, refEndpoint2] refRelation refSettings)
+  return (RefValue (refEndpoint1, refEndpoint2) refRelation refSettings)
 
 pRefEndpoint :: Parser RefEndpoint
 pRefEndpoint = do

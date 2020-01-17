@@ -5,6 +5,11 @@ module DBML.Normalizer
   , DBMLNormalizedState (..)
   , Id
   , NEnum (..)
+  , NTable (..)
+  , NField (..)
+  , NIndex (..)
+  , NRef (..)
+  , NEndpoint (..)
   )
 where
 
@@ -67,7 +72,7 @@ data NRef = NRef
   , nrName :: Maybe Text
   , nrValueRelation :: RefRelation
   , nrValueSettings :: Maybe [RefSetting]
-  , nrEndpointIds :: [Id]
+  , nrEndpointIds :: (Id, Id)
   } deriving (Show)
 
 data NEndpoint = NEndpoint
@@ -418,13 +423,14 @@ buildRefMap (Database xs) = mapM_ buildRef (refs ++ inlineRefs)
     let refId = refIdCounter state
     put state { refIdCounter = refId + 1 }
     endpointMap <- getEndPointMap ref refId
+    let endpointIds = map fst (Map.toList endpointMap)
     let refMap = Map.fromList
           [ ( refId
             , NRef { nrId            = refId
                    , nrName          = refName ref
                    , nrValueRelation = refValueRelation (refValue ref)
                    , nrValueSettings = refValueSettings (refValue ref)
-                   , nrEndpointIds   = map fst (Map.toList endpointMap)
+                   , nrEndpointIds   = (head endpointIds, last endpointIds)
                    }
             )
           ]
@@ -456,14 +462,14 @@ getInlineRefs (Database xs) = concatMap getInlineRefsFromTable tables
               , refValue =
                 RefValue
                   { refValueEndpoints =
-                    [ RefEndpoint { endpointTableName = tableName table
+                    ( RefEndpoint { endpointTableName = tableName table
                                   , endpointFieldName = fieldName field
                                   }
                     , RefEndpoint
                       { endpointTableName = refInlineTableName inlineRef
                       , endpointFieldName = refInlineFieldName inlineRef
                       }
-                    ]
+                    )
                   , refValueRelation  = refInlineRelation inlineRef
                   , refValueSettings  = Nothing
                   }
@@ -478,7 +484,8 @@ getInlineRefs (Database xs) = concatMap getInlineRefsFromTable tables
 getEndPointMap :: Ref -> Id -> DBMLMonad (Map.Map Id NEndpoint)
 getEndPointMap ref id = Map.fromList <$> mapM buildEndpoint endpoints
  where
-  endpoints = refValueEndpoints (refValue ref)
+  endpoints = [fst endpointTuple, snd endpointTuple]
+  endpointTuple = refValueEndpoints (refValue ref)
   buildEndpoint endpoint = do
     state <- get
     let endpointId = endpointIdCounter state

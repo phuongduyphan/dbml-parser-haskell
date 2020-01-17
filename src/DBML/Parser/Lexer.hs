@@ -11,7 +11,6 @@ module DBML.Parser.Lexer
   , typeLiteral
   , colorLiteral
   , Parser
-  , Boolean
   , FieldType
   , Expression
   , Color
@@ -31,7 +30,6 @@ import qualified Text.Megaparsec               as MP
 
 type Parser = MP.Parsec Void Text
 type Expression = Text
-data Boolean = True | False deriving (Eq, Show)
 data Color = RGB Int Int Int | RGBA Int Int Int Float | HexColor Text deriving (Show)
 data FieldType = FieldType
   { typeName :: Text
@@ -107,10 +105,10 @@ expressionLiteral =
     $   T.pack
     <$> (lexeme (char '`') *> MP.manyTill L.charLiteral (lexeme $ char '`'))
 
-booleanLiteral :: Parser Boolean
+booleanLiteral :: Parser Bool
 booleanLiteral =
-  (DBML.Parser.Lexer.True <$ lexeme (string "true"))
-    <|> (DBML.Parser.Lexer.False <$ lexeme (string "false"))
+  (True <$ lexeme (string "true"))
+    <|> (False <$ lexeme (string "false"))
 
 numberLiteral :: Parser Scientific
 numberLiteral = L.scientific
