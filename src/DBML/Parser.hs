@@ -35,13 +35,12 @@ import           DBML.Parser.Keyword
 import           Control.Applicative
 import           Text.Megaparsec.Char
 import           Text.Megaparsec               as MP
-import           Data.Scientific                ( Scientific )
 import           Data.Maybe                     ( fromMaybe )
 import           Data.Void                      ( Void )
 
 data DefaultType = DefaultString Text
   | DefaultExpr Expression
-  | DefaultNum Scientific
+  | DefaultNum Text
   | DefaultBool Bool
   | DefaultNull deriving (Show)
 

@@ -110,8 +110,8 @@ booleanLiteral =
   (True <$ lexeme (string "true"))
     <|> (False <$ lexeme (string "false"))
 
-numberLiteral :: Parser Scientific
-numberLiteral = L.scientific
+numberLiteral :: Parser Text
+numberLiteral = lexeme $ T.pack <$> MP.some (alphaNumChar <|> char '-' <|>  char '+' <|> char '.' <|> char ',')
 
 sc :: Parser ()
 sc = L.space space1 (L.skipLineComment "//") empty

@@ -154,7 +154,7 @@ getFieldLine fieldId = do
           (DefaultString value) -> " DEFAULT " `T.append` wrapInQuote "'" value
           (DefaultExpr value) -> " DEFAULT (" `T.append` value `T.append` ")"
           (DefaultBool value) -> " DEFAULT " `T.append` (T.pack . show $ value)
-          (DefaultNum value) -> " DEFAULT " `T.append` (T.pack . show $ value)
+          (DefaultNum value) -> " DEFAULT " `T.append` value
           DefaultNull -> " DEFAULT NULL"
         where
           defaultSettingMaybe =
