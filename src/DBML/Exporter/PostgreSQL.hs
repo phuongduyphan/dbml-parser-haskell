@@ -14,6 +14,7 @@ import           DBML.Parser                    ( EnumValue(..)
                                                 , RefRelation(..)
                                                 , RefSetting(..)
                                                 , RefAction(..)
+                                                , IndexType(..)
                                                 )
 import           Data.Text                      ( Text )
 import qualified Data.Text                     as T
@@ -33,10 +34,9 @@ exportM = do
   enums  <- exportEnums
   tables <- exportTables
   refs <- exportRefs
-  return (enums `T.append` tables `T.append` refs)
-  -- indexes <- exportIndexes
-  -- refs <- exportRefs
+  indexes <- exportIndexes
   -- comments <- exportComments
+  return (enums `T.append` tables `T.append` refs `T.append` indexes)
 
 exportEnums :: Reader DBMLNormalizedState Text
 exportEnums = do
@@ -156,11 +156,11 @@ getFieldLine fieldId = do
           (DefaultBool value) -> " DEFAULT " `T.append` (T.pack . show $ value)
           (DefaultNum value) -> " DEFAULT " `T.append` (T.pack . show $ value)
           DefaultNull -> " DEFAULT NULL"
-       where
-        defaultSettingMaybe =
-          find isDefault (fromMaybe [] (nfFieldSettings field))
-        isDefault (FieldDefault _) = True
-        isDefault _                = False
+        where
+          defaultSettingMaybe =
+            find isDefault (fromMaybe [] (nfFieldSettings field))
+          isDefault (FieldDefault _) = True
+          isDefault _                = False
     Nothing -> return ""
 
 getCompositePks :: Id -> Reader DBMLNormalizedState [Text]
@@ -260,4 +260,57 @@ exportRef refId = do
                 isRefOnUpdate (RefOnUpdate _) = True
                 isRefOnUpdate _ = False;
         Nothing -> ""
+    Nothing -> return ""
+
+exportIndexes :: Reader DBMLNormalizedState Text
+exportIndexes = do
+  ns <- ask
+  indexes <- mapM (exportIndex . fst) (Map.toList (indexS ns))
+  let indexStr = foldl T.append "" (intersperse "\n" indexes)
+  if not $ null indexes then return (indexStr `T.append` "\n") else return indexStr
+
+exportIndex :: Id -> Reader DBMLNormalizedState Text
+exportIndex indexId = do
+  ns <- ask
+  case Map.lookup indexId (indexS ns) of
+    Just index -> return $ fromMaybe "" exportIndexMaybe
+      where
+        exportIndexMaybe = do
+          table <- Map.lookup (niTableId index) (tableS ns)
+          return 
+            ( "CREATE"
+            `T.append` exportIndexUnique
+            `T.append` " INDEX"
+            `T.append` exportIndexName
+            `T.append` " ON "
+            `T.append` wrapInQuote "\"" (ntName table)
+            `T.append` exportIndexType
+            `T.append` " ("
+            `T.append` exportIndexIdentifiers 
+            `T.append` ");\n")
+        exportIndexUnique 
+          | any isIndexUnique (fromMaybe [] (niIndexSettings index))
+          = " UNIQUE"
+          | otherwise = ""
+          where 
+            isIndexUnique IndexUnique = True
+            isIndexUnique _ = False
+        exportIndexName = case idxNameSetting of
+          Nothing -> ""
+          Just (IndexName name) -> " " `T.append` wrapInQuote "\"" name
+          where 
+            idxNameSetting = find isIndexName (fromMaybe [] (niIndexSettings index))
+            isIndexName (IndexName _) = True
+            isIndexName _ = False
+        exportIndexType = case idxTypeSetting of
+          Nothing -> ""
+          Just (IndexType BTree) -> " USING BTREE"
+          Just (IndexType Hash) -> " USING HASH"
+          where
+            idxTypeSetting = find isIndexType (fromMaybe [] (niIndexSettings index))
+            isIndexType (IndexType _) = True
+            isIndexType _ = False
+        exportIndexIdentifiers = foldl T.append "" (map exportIndexIdentifier (niIndexIdentifiers index))
+        exportIndexIdentifier (IndexColumn value) = wrapInQuote "\"" value
+        exportIndexIdentifier (IndexExpr expr) = "(" `T.append` expr `T.append` ")"
     Nothing -> return ""

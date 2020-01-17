@@ -25,6 +25,7 @@ module DBML.Parser
   , RefInline(..)
   , DefaultType(..)
   , RefAction(..)
+  , IndexType(..)
   )
 where
 
